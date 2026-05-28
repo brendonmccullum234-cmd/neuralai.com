@@ -1,1 +1,922 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+const formatTime = (date) =>
+  date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+const generateId = () => Math.random().toString(36).slice(2, 9);
+
+// ─── Static data ─────────────────────────────────────────────────────────────
+const CHAT_HISTORY = [
+  { id: "h1", title: "Explain quantum entanglement", date: "Today" },
+  { id: "h2", title: "React hooks deep dive", date: "Today" },
+  { id: "h3", title: "Best pasta recipes", date: "Yesterday" },
+  { id: "h4", title: "Stoicism & modern life", date: "Yesterday" },
+  { id: "h5", title: "Refactor my auth module", date: "Mon" },
+  { id: "h6", title: "Plan a trip to Kyoto", date: "Mon" },
+];
+
+const PLACEHOLDER_REPLIES = [
+  "That's a great question. Let me think through this carefully — there are several angles worth exploring here, and I want to make sure I give you a thorough, nuanced answer.",
+  "Interesting point. Here's how I'd frame it: at the core, the concept you're describing touches on a tension between two competing principles that shows up across many domains.",
+  "Sure! The short answer is yes, but the long answer involves a few important caveats that are easy to overlook. Let me walk you through the key points.",
+  "Great prompt. I'll break this into three parts so it's easy to follow: first the what, then the why, then some practical takeaways you can actually use.",
+  "This is one of those topics where intuition and reality diverge in surprising ways. Let me start by challenging the most common assumption people bring to it.",
+];
+
+// ─── Icons (inline SVG, no external deps) ────────────────────────────────────
+const IconSend = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 2L11 13" /><path d="M22 2L15 22l-4-9-9-4 20-7z" />
+  </svg>
+);
+const IconPlus = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+const IconCopy = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+);
+const IconCheck = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 6L9 17l-5-5" />
+  </svg>
+);
+const IconMenu = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  </svg>
+);
+const IconMic = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0" /><path d="M12 19v3" /><path d="M9 22h6" />
+  </svg>
+);
+const IconAttach = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.64 16.2a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+  </svg>
+);
+const IconBot = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="11" width="18" height="10" rx="2" /><circle cx="12" cy="5" r="2" /><path d="M12 7v4" /><path d="M8 15h.01M16 15h.01" />
+  </svg>
+);
+const IconChevron = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 9l6 6 6-6" />
+  </svg>
+);
+const IconTrash = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+  </svg>
+);
+
+// ─── Typing dots ──────────────────────────────────────────────────────────────
+const TypingDots = () => (
+  <div style={{ display: "flex", gap: 5, alignItems: "center", padding: "4px 0" }}>
+    {[0, 1, 2].map((i) => (
+      <span key={i} style={{
+        width: 7, height: 7, borderRadius: "50%",
+        background: "var(--accent)",
+        animation: `typingBounce 1.2s ease-in-out ${i * 0.2}s infinite`,
+        display: "block",
+      }} />
+    ))}
+  </div>
+);
+
+// ─── Message bubble ───────────────────────────────────────────────────────────
+const MessageBubble = ({ msg }) => {
+  const [copied, setCopied] = useState(false);
+  const isUser = msg.role === "user";
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(msg.content).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div style={{
+      display: "flex",
+      flexDirection: isUser ? "row-reverse" : "row",
+      gap: 10,
+      alignItems: "flex-start",
+      animation: "fadeSlideIn 0.25s ease forwards",
+      opacity: 0,
+    }}>
+      {/* Avatar */}
+      {!isUser && (
+        <div style={{
+          width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
+          background: "linear-gradient(135deg, var(--accent), var(--accent2))",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: "#fff", marginTop: 2,
+        }}>
+          <IconBot />
+        </div>
+      )}
+
+      <div style={{ maxWidth: "72%", display: "flex", flexDirection: "column", gap: 4, alignItems: isUser ? "flex-end" : "flex-start" }}>
+        <div style={{
+          padding: "11px 15px",
+          borderRadius: isUser ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+          background: isUser
+            ? "linear-gradient(135deg, var(--accent), var(--accent2))"
+            : "var(--bubble-ai)",
+          color: isUser ? "#fff" : "var(--text-primary)",
+          fontSize: 14.5,
+          lineHeight: 1.65,
+          border: isUser ? "none" : "1px solid var(--border)",
+          backdropFilter: "blur(8px)",
+          boxShadow: isUser
+            ? "0 4px 20px rgba(99,102,241,0.25)"
+            : "0 2px 12px rgba(0,0,0,0.15)",
+        }}>
+          {msg.content}
+        </div>
+
+        {/* Timestamp + copy */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)" }}>
+            {formatTime(msg.timestamp)}
+          </span>
+          {!isUser && (
+            <button onClick={handleCopy} title="Copy" style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: copied ? "var(--success)" : "var(--text-muted)",
+              display: "flex", alignItems: "center", gap: 4,
+              fontSize: 11, padding: "2px 4px", borderRadius: 4,
+              transition: "color 0.2s",
+            }}>
+              {copied ? <IconCheck /> : <IconCopy />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
+const Sidebar = ({ open, onClose, activeChat, onSelectChat, onNewChat }) => {
+  const grouped = [
+    { label: "Today", items: CHAT_HISTORY.filter(c => c.date === "Today") },
+    { label: "Yesterday", items: CHAT_HISTORY.filter(c => c.date === "Yesterday") },
+    { label: "Earlier", items: CHAT_HISTORY.filter(c => c.date === "Mon") },
+  ];
+
+  return (
+    <>
+      {/* Overlay (mobile) */}
+      {open && (
+        <div onClick={onClose} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+          zIndex: 40, display: "none",
+        }} className="sidebar-overlay" />
+      )}
+
+      <aside style={{
+        width: 260, flexShrink: 0,
+        background: "var(--sidebar-bg)",
+        borderRight: "1px solid var(--border)",
+        display: "flex", flexDirection: "column",
+        height: "100%",
+        transition: "transform 0.3s cubic-bezier(0.4,0,0.2,1)",
+        position: "relative", zIndex: 50,
+      }}>
+        {/* Logo */}
+        <div style={{ padding: "18px 16px 12px", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 14 }}>
+            <div style={{
+              width: 30, height: 30, borderRadius: 8,
+              background: "linear-gradient(135deg, var(--accent), var(--accent2))",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <IconBot />
+            </div>
+            <span style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.3px" }}>
+              NeuralChat
+            </span>
+          </div>
+          <button onClick={onNewChat} style={{
+            width: "100%", padding: "9px 12px",
+            background: "linear-gradient(135deg, var(--accent), var(--accent2))",
+            border: "none", borderRadius: 10, cursor: "pointer",
+            color: "#fff", fontSize: 13.5, fontWeight: 500,
+            display: "flex", alignItems: "center", gap: 7,
+            justifyContent: "center",
+            boxShadow: "0 4px 16px rgba(99,102,241,0.3)",
+            transition: "opacity 0.15s, transform 0.15s",
+          }}
+            onMouseEnter={e => { e.currentTarget.style.opacity = "0.88"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "translateY(0)"; }}
+          >
+            <IconPlus /> New chat
+          </button>
+        </div>
+
+        {/* History */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "10px 8px" }}>
+          {grouped.map(group => (
+            <div key={group.label} style={{ marginBottom: 16 }}>
+              <p style={{ fontSize: 10.5, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.06em", textTransform: "uppercase", padding: "4px 8px 6px" }}>
+                {group.label}
+              </p>
+              {group.items.map(chat => (
+                <button key={chat.id} onClick={() => onSelectChat(chat.id)} style={{
+                  width: "100%", textAlign: "left", padding: "8px 10px",
+                  borderRadius: 8, border: "none", cursor: "pointer",
+                  background: activeChat === chat.id ? "var(--item-active)" : "transparent",
+                  color: activeChat === chat.id ? "var(--text-primary)" : "var(--text-secondary)",
+                  fontSize: 13.5, display: "flex", alignItems: "center",
+                  justifyContent: "space-between", gap: 6,
+                  transition: "background 0.15s, color 0.15s",
+                  borderLeft: activeChat === chat.id ? "2px solid var(--accent)" : "2px solid transparent",
+                }}
+                  onMouseEnter={e => { if (activeChat !== chat.id) e.currentTarget.style.background = "var(--item-hover)"; }}
+                  onMouseLeave={e => { if (activeChat !== chat.id) e.currentTarget.style.background = "transparent"; }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                    {chat.title}
+                  </span>
+                  {activeChat === chat.id && (
+                    <span style={{ opacity: 0.4, flexShrink: 0 }}><IconTrash /></span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        {/* User */}
+        <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "6px 4px", borderRadius: 8, transition: "background 0.15s" }}
+            onMouseEnter={e => e.currentTarget.style.background = "var(--item-hover)"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+          >
+            <div style={{
+              width: 32, height: 32, borderRadius: "50%",
+              background: "linear-gradient(135deg, #f97316, #ec4899)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 13, fontWeight: 700, color: "#fff", flexShrink: 0,
+            }}>A</div>
+            <div style={{ flex: 1, overflow: "hidden" }}>
+              <p style={{ fontSize: 13.5, fontWeight: 500, color: "var(--text-primary)", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Alex Johnson</p>
+              <p style={{ fontSize: 11.5, color: "var(--text-muted)", margin: 0 }}>Free plan</p>
+            </div>
+            <IconChevron />
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+};
+
+// ─── Main app ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [messages, setMessages] = useState([
+    {
+      id: generateId(), role: "assistant",
+      content: "Hello! I'm your AI assistant. I can help you write, analyze, code, brainstorm, and much more. What's on your mind?",
+      timestamp: new Date(),
+    }
+  ]);
+  const [input, setInput] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [activeChat, setActiveChat] = useState("h1");
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+  const replyIndex = useRef(0);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isTyping]);
+
+  const sendMessage = useCallback(() => {
+    const text = input.trim();
+    if (!text || isTyping) return;
+    setInput("");
+
+    const userMsg = { id: generateId(), role: "user", content: text, timestamp: new Date() };
+    setMessages(prev => [...prev, userMsg]);
+    setIsTyping(true);
+
+    // Simulate AI response with realistic delay
+    const delay = 1000 + Math.random() * 1200;
+    setTimeout(() => {
+      const reply = PLACEHOLDER_REPLIES[replyIndex.current % PLACEHOLDER_REPLIES.length];
+      replyIndex.current++;
+      setIsTyping(false);
+      setMessages(prev => [...prev, { id: generateId(), role: "assistant", content: reply, timestamp: new Date() }]);
+    }, delay);
+  }, [input, isTyping]);
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  };
+
+  const handleNewChat = () => {
+    setMessages([{ id: generateId(), role: "assistant", content: "New conversation started. What can I help you with?", timestamp: new Date() }]);
+    setInput("");
+    setIsTyping(false);
+    setActiveChat(null);
+  };
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400&display=swap');
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+          --bg: #0c0c0e;
+          --sidebar-bg: #111114;
+          --surface: #16161a;
+          --bubble-ai: rgba(255,255,255,0.04);
+          --border: rgba(255,255,255,0.08);
+          --text-primary: #f0f0f4;
+          --text-secondary: #9898a8;
+          --text-muted: #5c5c70;
+          --accent: #6366f1;
+          --accent2: #8b5cf6;
+          --success: #34d399;
+          --item-hover: rgba(255,255,255,0.04);
+          --item-active: rgba(99,102,241,0.12);
+          --input-bg: rgba(255,255,255,0.05);
+          --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        body { background: var(--bg); color: var(--text-primary); font-family: 'DM Sans', system-ui, sans-serif; }
+
+        #root { display: flex; height: 100vh; overflow: hidden; }
+
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+
+        textarea:focus { outline: none; }
+        textarea { resize: none; }
+
+        @keyframes fadeSlideIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes typingBounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30%            { transform: translateY(-5px); opacity: 1; }
+        }
+
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+
+        .send-btn:hover { opacity: 0.85; transform: scale(1.05); }
+        .send-btn:active { transform: scale(0.97); }
+        .send-btn { transition: opacity 0.15s, transform 0.15s; }
+
+        @media (max-width: 680px) {
+          .sidebar { display: none; }
+          .sidebar-open { display: flex !important; position: fixed !important; top: 0; left: 0; height: 100% !important; z-index: 60; }
+        }
+      `}</style>
+
+      {/* Sidebar */}
+      <div className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`} style={{ display: sidebarOpen ? "flex" : "none", height: "100%" }}>
+        <Sidebar
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          activeChat={activeChat}
+          onSelectChat={setActiveChat}
+          onNewChat={handleNewChat}
+        />
+      </div>
+
+      {/* Main */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", background: "var(--bg)" }}>
+
+        {/* Header */}
+        <header style={{
+          padding: "14px 20px", borderBottom: "1px solid var(--border)",
+          display: "flex", alignItems: "center", gap: 14,
+          backdropFilter: "blur(12px)",
+          background: "rgba(12,12,14,0.85)",
+          flexShrink: 0,
+        }}>
+          <button onClick={() => setSidebarOpen(v => !v)} style={{
+            background: "none", border: "1px solid var(--border)", borderRadius: 8,
+            padding: "6px 8px", cursor: "pointer", color: "var(--text-secondary)",
+            display: "flex", transition: "background 0.15s, color 0.15s",
+          }}
+            onMouseEnter={e => { e.currentTarget.style.background = "var(--item-hover)"; e.currentTarget.style.color = "var(--text-primary)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-secondary)"; }}
+          >
+            <IconMenu />
+          </button>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{
+              width: 8, height: 8, borderRadius: "50%",
+              background: "var(--success)",
+              boxShadow: "0 0 8px rgba(52,211,153,0.6)",
+              animation: "pulse 2.5s ease infinite",
+            }} />
+            <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>AI Assistant</span>
+            <span style={{
+              fontSize: 11, padding: "2px 8px", borderRadius: 20,
+              background: "rgba(99,102,241,0.15)", color: "var(--accent)",
+              border: "1px solid rgba(99,102,241,0.25)", fontWeight: 500,
+            }}>GPT-4o</span>
+          </div>
+
+          <div style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--text-muted)" }}>
+            {messages.length - 1} message{messages.length !== 2 ? "s" : ""}
+          </div>
+        </header>
+
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "28px 20px", display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ maxWidth: 740, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+            {messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)}
+
+            {/* Typing indicator */}
+            {isTyping && (
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start", animation: "fadeSlideIn 0.2s ease forwards" }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
+                  background: "linear-gradient(135deg, var(--accent), var(--accent2))",
+                  display: "flex", alignItems: "center", justifyContent: "center", color: "#fff",
+                }}>
+                  <IconBot />
+                </div>
+                <div style={{
+                  padding: "11px 16px", borderRadius: "18px 18px 18px 4px",
+                  background: "var(--bubble-ai)", border: "1px solid var(--border)",
+                }}>
+                  <TypingDots />
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+        </div>
+
+        {/* Input */}
+        <div style={{ padding: "14px 20px 18px", borderTop: "1px solid var(--border)", flexShrink: 0, background: "rgba(12,12,14,0.9)", backdropFilter: "blur(16px)" }}>
+          <div style={{ maxWidth: 740, margin: "0 auto" }}>
+            <div style={{
+              display: "flex", alignItems: "flex-end", gap: 10,
+              background: "var(--input-bg)",
+              border: "1px solid var(--border)",
+              borderRadius: 14, padding: "10px 12px",
+              transition: "border-color 0.2s, box-shadow 0.2s",
+            }}
+              onFocusCapture={e => { e.currentTarget.style.borderColor = "rgba(99,102,241,0.5)"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(99,102,241,0.08)"; }}
+              onBlurCapture={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.boxShadow = "none"; }}
+            >
+              {/* Attach */}
+              <button style={{
+                background: "none", border: "none", cursor: "pointer",
+                color: "var(--text-muted)", padding: "4px", borderRadius: 6,
+                display: "flex", transition: "color 0.15s",
+              }}
+                onMouseEnter={e => e.currentTarget.style.color = "var(--text-secondary)"}
+                onMouseLeave={e => e.currentTarget.style.color = "var(--text-muted)"}
+              ><IconAttach /></button>
+
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => {
+                  setInput(e.target.value);
+                  e.target.style.height = "auto";
+                  e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder="Message AI Assistant…"
+                rows={1}
+                style={{
+                  flex: 1, background: "none", border: "none",
+                  color: "var(--text-primary)", fontSize: 14.5,
+                  lineHeight: 1.6, fontFamily: "'DM Sans', system-ui, sans-serif",
+                  maxHeight: 160, overflowY: "auto",
+                  caretColor: "var(--accent)",
+                }}
+              />
+
+              {/* Mic */}
+              <button style={{
+                background: "none", border: "none", cursor: "pointer",
+                color: "var(--text-muted)", padding: "4px", borderRadius: 6,
+                display: "flex", transition: "color 0.15s",
+              }}
+                onMouseEnter={e => e.currentTarget.style.color = "var(--text-secondary)"}
+                onMouseLeave={e => e.currentTarget.style.color = "var(--text-muted)"}
+              ><IconMic /></button>
+
+              {/* Send */}
+              <button className="send-btn" onClick={sendMessage} disabled={!input.trim() || isTyping} style={{
+                width: 36, height: 36, borderRadius: 10, border: "none",
+                background: input.trim() && !isTyping
+                  ? "linear-gradient(135deg, var(--accent), var(--accent2))"
+                  : "rgba(255,255,255,0.06)",
+                color: input.trim() && !isTyping ? "#fff" : "var(--text-muted)",
+                cursor: input.trim() && !isTyping ? "pointer" : "default",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                boxShadow: input.trim() && !isTyping ? "0 4px 14px rgba(99,102,241,0.35)" : "none",
+                flexShrink: 0,
+              }}>
+                <IconSend />
+              </button>
+            </div>
+            <p style={{ textAlign: "center", fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
+              Press <kbd style={{ padding: "1px 5px", borderRadius: 4, border: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: 10 }}>Enter</kbd> to send &nbsp;·&nbsp;
+              <kbd style={{ padding: "1px 5px", borderRadius: 4, border: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: 10 }}>Shift+Enter</kbd> for new line
+            </p>
+          </div>
+        </div>
+      </main>
+    </>
+  );
+}
+import { useState, useEffect, useRef } from "react";
+
+const SYSTEM = `You are Neurala AI, a premium intelligent assistant.
+Rules:
+- Never mention OpenAI, ChatGPT, GPT, Claude, or Anthropic
+- Never say "as an AI language model"  
+- You are Neurala AI, a standalone system
+- Always give accurate factual answers (e.g. Russia is world largest country by area, China by population, etc.)
+- Be clear, structured, helpful
+- Auto-detect mode: Study / Coding / Business / Creative / Quick`;
+
+const uid = () => Math.random().toString(36).slice(2, 8);
+const ftime = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+function detectMode(text) {
+  const t = text.toLowerCase();
+  if (t.includes("```") || t.includes("function") || t.includes("import") || t.includes("def ")) return ["💻 Coding", "#22d3ee"];
+  if (t.includes("explain") || t.includes("what is") || t.includes("how does") || t.includes("study")) return ["📚 Study", "#a78bfa"];
+  if (t.includes("business") || t.includes("strategy") || t.includes("market")) return ["💼 Business", "#34d399"];
+  if (t.includes("story") || t.includes("poem") || t.includes("creative")) return ["🎨 Creative", "#f472b6"];
+  return ["⚡ Quick", "#fbbf24"];
+}
+
+function renderMD(raw) {
+  return raw
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, (_,lang,code)=>
+      `<div class="cb"><div class="cl">${lang||"code"}</div><pre><code>${code.trim()}</code></pre></div>`)
+    .replace(/`([^`]+)`/g,'<code class="ic">$1</code>')
+    .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
+    .replace(/^### (.+)$/gm,'<h3>$1</h3>')
+    .replace(/^## (.+)$/gm,'<h2>$1</h2>')
+    .replace(/^# (.+)$/gm,'<h1>$1</h1>')
+    .replace(/^[-*] (.+)$/gm,'<li>$1</li>')
+    .replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m=>`<ul>${m}</ul>`)
+    .replace(/\n\n/g,"<br/><br/>")
+    .replace(/\n/g,"<br/>");
+}
+
+const Logo = () => (
+  <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="9" r="3.5" fill="white"/>
+    <circle cx="9" cy="22" r="3.5" fill="white"/>
+    <circle cx="23" cy="22" r="3.5" fill="white"/>
+    <line x1="16" y1="9" x2="9" y2="22" stroke="white" strokeWidth="1.8" opacity="0.6"/>
+    <line x1="16" y1="9" x2="23" y2="22" stroke="white" strokeWidth="1.8" opacity="0.6"/>
+    <line x1="9" y1="22" x2="23" y2="22" stroke="white" strokeWidth="1.8" opacity="0.6"/>
+  </svg>
+);
+
+const Dots = () => (
+  <div style={{display:"flex",gap:5,padding:"4px 0",alignItems:"center"}}>
+    {[0,1,2].map(i=>(
+      <span key={i} style={{width:7,height:7,borderRadius:"50%",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"block",animation:`dot 1.3s ease-in-out ${i*0.18}s infinite`}}/>
+    ))}
+  </div>
+);
+
+function Bubble({ msg, latest }) {
+  const [copied, setCopied] = useState(false);
+  const isUser = msg.role === "user";
+  const [mLabel, mColor] = !isUser ? detectMode(msg.content) : [];
+
+  const copy = () => {
+    navigator.clipboard.writeText(msg.content).catch(()=>{});
+    setCopied(true);
+    setTimeout(()=>setCopied(false), 2000);
+  };
+
+  return (
+    <div style={{display:"flex",flexDirection:isUser?"row-reverse":"row",gap:11,alignItems:"flex-start",animation:"fadeUp 0.28s ease forwards",opacity:0}}>
+      {!isUser && (
+        <div style={{width:34,height:34,borderRadius:"50%",flexShrink:0,marginTop:2,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 14px rgba(99,102,241,0.4)"}}>
+          <Logo/>
+        </div>
+      )}
+      <div style={{maxWidth:"75%",display:"flex",flexDirection:"column",gap:5,alignItems:isUser?"flex-end":"flex-start"}}>
+        {!isUser && (
+          <span style={{fontSize:10.5,fontWeight:600,color:mColor,padding:"2px 8px",borderRadius:20,background:mColor+"18",border:`1px solid ${mColor}30`,letterSpacing:"0.05em"}}>{mLabel} MODE</span>
+        )}
+        <div style={{
+          padding:isUser?"11px 16px":"13px 17px",
+          borderRadius:isUser?"18px 18px 4px 18px":"4px 18px 18px 18px",
+          background:isUser?"linear-gradient(135deg,#6366f1,#8b5cf6)":"rgba(255,255,255,0.045)",
+          border:isUser?"none":"1px solid rgba(255,255,255,0.09)",
+          color:isUser?"#fff":"#dcdcec",fontSize:14.5,lineHeight:1.7,
+          boxShadow:isUser?"0 6px 22px rgba(99,102,241,0.3)":"0 2px 14px rgba(0,0,0,0.2)",
+        }}>
+          {isUser
+            ? <p style={{margin:0}}>{msg.content}</p>
+            : <div className="md" dangerouslySetInnerHTML={{__html:renderMD(msg.content)}}/>
+          }
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:11,color:"#44445a",fontFamily:"monospace"}}>{ftime(msg.timestamp)}</span>
+          {!isUser && (
+            <button onClick={copy} style={{background:"none",border:"none",cursor:"pointer",color:copied?"#34d399":"#44445a",display:"flex",alignItems:"center",gap:4,fontSize:11,padding:"2px 6px",borderRadius:5,transition:"color 0.2s"}}>
+              {copied ? "✓ Copied!" : "⧉ Copy"}
+            </button>
+          )}
+          {!isUser && latest && (
+            <span style={{fontSize:10.5,color:"#34d399",display:"flex",alignItems:"center",gap:3}}>
+              <span style={{width:5,height:5,borderRadius:"50%",background:"#34d399",display:"inline-block"}}/> Neurala AI
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Welcome({ onSuggest }) {
+  const cards = [
+    {icon:"🌍", text:"What is the world's largest country?"},
+    {icon:"💻", text:"Write a JavaScript fetch function"},
+    {icon:"📐", text:"Explain Pythagoras theorem simply"},
+    {icon:"💼", text:"How to validate a startup idea?"},
+  ];
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,padding:"40px 24px",gap:28}}>
+      <div style={{textAlign:"center",animation:"fadeUp 0.4s ease forwards"}}>
+        <div style={{width:70,height:70,borderRadius:"50%",margin:"0 auto 14px",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 8px 40px rgba(99,102,241,0.45)"}}>
+          <svg width="34" height="34" viewBox="0 0 32 32" fill="none">
+            <circle cx="16" cy="9" r="4" fill="white"/><circle cx="8" cy="23" r="4" fill="white"/><circle cx="24" cy="23" r="4" fill="white"/>
+            <line x1="16" y1="9" x2="8" y2="23" stroke="white" strokeWidth="2" opacity="0.55"/>
+            <line x1="16" y1="9" x2="24" y2="23" stroke="white" strokeWidth="2" opacity="0.55"/>
+            <line x1="8" y1="23" x2="24" y2="23" stroke="white" strokeWidth="2" opacity="0.55"/>
+          </svg>
+        </div>
+        <h1 style={{fontSize:27,fontWeight:700,color:"#f0f0f4",margin:"0 0 8px",letterSpacing:"-0.4px"}}>Neurala AI</h1>
+        <p style={{fontSize:14.5,color:"#5a5a70",margin:0}}>Intelligent answers across every domain. Ask me anything.</p>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,width:"100%",maxWidth:500}}>
+        {cards.map((c,i)=>(
+          <button key={i} onClick={()=>onSuggest(c.text)} style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:"13px 15px",cursor:"pointer",textAlign:"left",color:"#b0b0c8",fontSize:13.5,display:"flex",gap:9,alignItems:"flex-start",lineHeight:1.4,transition:"all 0.2s",animation:`fadeUp 0.4s ease ${i*0.07}s forwards`,opacity:0}}
+            onMouseEnter={e=>{e.currentTarget.style.background="rgba(99,102,241,0.1)";e.currentTarget.style.borderColor="rgba(99,102,241,0.3)";e.currentTarget.style.color="#e0e0f0";e.currentTarget.style.transform="translateY(-2px)";}}
+            onMouseLeave={e=>{e.currentTarget.style.background="rgba(255,255,255,0.03)";e.currentTarget.style.borderColor="rgba(255,255,255,0.08)";e.currentTarget.style.color="#b0b0c8";e.currentTarget.style.transform="translateY(0)";}}
+          >
+            <span style={{fontSize:17}}>{c.icon}</span><span>{c.text}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function NeuralaChatArea() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput]       = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [streaming, setStreaming] = useState("");
+  const [errMsg, setErrMsg]     = useState("");
+  const bottomRef = useRef(null);
+  const inputRef  = useRef(null);
+  const stopped   = useRef(false);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streaming, loading]);
+
+  const send = async (override) => {
+    const text = (override || input).trim();
+    if (!text || loading) return;
+    setInput("");
+    setErrMsg("");
+    stopped.current = false;
+
+    const userMsg = { id: uid(), role: "user", content: text, timestamp: new Date() };
+    const next = [...messages, userMsg];
+    setMessages(next);
+    setLoading(true);
+    setStreaming("");
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: SYSTEM,
+          stream: true,
+          messages: next.map(m => ({ role: m.role, content: m.content })),
+        }),
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error?.message || "API error " + res.status);
+      }
+
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let full = "";
+
+      while (true) {
+        if (stopped.current) { reader.cancel(); break; }
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of dec.decode(value).split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (raw === "[DONE]") continue;
+          try {
+            const p = JSON.parse(raw);
+            if (p.type === "content_block_delta" && p.delta?.text) {
+              full += p.delta.text;
+              setStreaming(full);
+            }
+          } catch (_) {}
+        }
+      }
+
+      setMessages(prev => [...prev, {
+        id: uid(), role: "assistant",
+        content: full || "I couldn't generate a response. Please try again.",
+        timestamp: new Date(),
+      }]);
+    } catch (e) {
+      setErrMsg("⚠️ " + (e.message || "Something went wrong."));
+    } finally {
+      setLoading(false);
+      setStreaming("");
+    }
+  };
+
+  const stop = () => {
+    stopped.current = true;
+    setLoading(false);
+    if (streaming) {
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", content: streaming, timestamp: new Date() }]);
+      setStreaming("");
+    }
+  };
+
+  const latestAIId = [...messages].reverse().find(m => m.role === "assistant")?.id;
+  const canSend = input.trim().length > 0 && !loading;
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+        body{background:#0c0c0e;font-family:'DM Sans',system-ui,sans-serif;}
+        textarea{font-family:inherit;resize:none;}
+        textarea:focus{outline:none;}
+        ::-webkit-scrollbar{width:4px;}
+        ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px;}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+        @keyframes dot{0%,60%,100%{transform:translateY(0);opacity:0.35;}30%{transform:translateY(-6px);opacity:1;}}
+        @keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
+        @keyframes pulse{0%,100%{box-shadow:0 0 6px rgba(52,211,153,0.5);}50%{box-shadow:0 0 14px rgba(52,211,153,0.9);}}
+        .md h1,.md h2,.md h3{color:#f0f0f8;font-weight:600;margin:10px 0 5px;}
+        .md h1{font-size:17px;}.md h2{font-size:15.5px;}.md h3{font-size:14.5px;}
+        .md ul{padding:4px 0;margin:4px 0;}
+        .md li{list-style:none;padding:2px 0 2px 18px;position:relative;}
+        .md li::before{content:"▸";position:absolute;left:0;color:#6366f1;font-size:11px;top:3px;}
+        .md strong{color:#fff;font-weight:600;}
+        .md .ic{background:rgba(99,102,241,0.15);color:#a5b4fc;padding:1px 6px;border-radius:4px;font-family:monospace;font-size:13px;border:1px solid rgba(99,102,241,0.25);}
+        .md .cb{background:#080810;border:1px solid rgba(255,255,255,0.1);border-radius:10px;overflow:hidden;margin:10px 0;}
+        .md .cl{padding:5px 14px;font-size:10.5px;color:#6366f1;font-family:monospace;background:rgba(99,102,241,0.07);border-bottom:1px solid rgba(255,255,255,0.06);text-transform:uppercase;letter-spacing:0.06em;}
+        .md pre{padding:13px 16px;overflow-x:auto;}
+        .md code{font-family:monospace;font-size:13px;line-height:1.65;color:#c4c4e0;}
+      `}</style>
+
+      <div style={{display:"flex",flexDirection:"column",height:"100vh",background:"#0c0c0e",overflow:"hidden"}}>
+
+        {/* Header */}
+        <header style={{padding:"13px 22px",borderBottom:"1px solid rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"rgba(10,10,12,0.92)",backdropFilter:"blur(16px)",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 16px rgba(99,102,241,0.4)"}}>
+              <Logo/>
+            </div>
+            <div>
+              <p style={{fontSize:15,fontWeight:650,color:"#f0f0f4",letterSpacing:"-0.3px",lineHeight:1.2}}>Neurala AI</p>
+              <p style={{fontSize:10.5,color:"#505065",lineHeight:1}}>Premium Intelligence</p>
+            </div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:7}}>
+            <div style={{width:7,height:7,borderRadius:"50%",background:"#34d399",animation:"pulse 2.5s ease infinite"}}/>
+            <span style={{fontSize:12,color:"#34d399",fontWeight:500}}>Online</span>
+            {messages.length > 0 && (
+              <span style={{marginLeft:6,fontSize:11,color:"#44445a",padding:"2px 9px",borderRadius:20,border:"1px solid rgba(255,255,255,0.08)"}}>
+                {messages.length} msg{messages.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+        </header>
+
+        {/* Messages */}
+        <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column"}}>
+          {messages.length === 0 && !loading
+            ? <Welcome onSuggest={send}/>
+            : (
+              <div style={{padding:"26px 22px",display:"flex",flexDirection:"column",gap:22,maxWidth:780,width:"100%",margin:"0 auto"}}>
+                {messages.map(m => <Bubble key={m.id} msg={m} latest={m.id === latestAIId}/>)}
+
+                {loading && streaming && (
+                  <div style={{display:"flex",gap:11,alignItems:"flex-start",animation:"fadeUp 0.2s ease forwards"}}>
+                    <div style={{width:34,height:34,borderRadius:"50%",flexShrink:0,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 14px rgba(99,102,241,0.4)"}}>
+                      <Logo/>
+                    </div>
+                    <div style={{maxWidth:"75%",padding:"13px 17px",borderRadius:"4px 18px 18px 18px",background:"rgba(255,255,255,0.045)",border:"1px solid rgba(99,102,241,0.2)",color:"#dcdcec",fontSize:14.5,lineHeight:1.7}}>
+                      <div className="md" dangerouslySetInnerHTML={{__html:renderMD(streaming)}}/>
+                      <span style={{display:"inline-block",width:2,height:15,background:"#6366f1",marginLeft:2,verticalAlign:"middle",animation:"blink 0.85s ease infinite"}}/>
+                    </div>
+                  </div>
+                )}
+
+                {loading && !streaming && (
+                  <div style={{display:"flex",gap:11,alignItems:"flex-start",animation:"fadeUp 0.2s ease forwards"}}>
+                    <div style={{width:34,height:34,borderRadius:"50%",flexShrink:0,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <Logo/>
+                    </div>
+                    <div style={{padding:"12px 17px",borderRadius:"4px 18px 18px 18px",background:"rgba(255,255,255,0.045)",border:"1px solid rgba(255,255,255,0.08)"}}>
+                      <Dots/>
+                    </div>
+                  </div>
+                )}
+
+                {errMsg && (
+                  <div style={{padding:"11px 15px",borderRadius:10,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",color:"#f87171",fontSize:13.5}}>
+                    {errMsg}
+                  </div>
+                )}
+
+                <div ref={bottomRef}/>
+              </div>
+            )
+          }
+        </div>
+
+        {/* Input */}
+        <div style={{padding:"13px 22px 18px",borderTop:"1px solid rgba(255,255,255,0.08)",background:"rgba(10,10,12,0.95)",backdropFilter:"blur(16px)",flexShrink:0}}>
+          <div style={{maxWidth:780,margin:"0 auto"}}>
+            <div style={{display:"flex",alignItems:"flex-end",gap:9,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:14,padding:"10px 12px",transition:"border-color 0.2s, box-shadow 0.2s"}}
+              onFocusCapture={e=>{e.currentTarget.style.borderColor="rgba(99,102,241,0.45)";e.currentTarget.style.boxShadow="0 0 0 3px rgba(99,102,241,0.07)";}}
+              onBlurCapture={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.08)";e.currentTarget.style.boxShadow="none";}}
+            >
+              <textarea ref={inputRef} value={input}
+                onChange={e=>{setInput(e.target.value);e.target.style.height="auto";e.target.style.height=Math.min(e.target.scrollHeight,160)+"px";}}
+                onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
+                placeholder="Ask Neurala anything…" rows={1} disabled={loading}
+                style={{flex:1,background:"none",border:"none",color:"#e0e0f0",fontSize:14.5,lineHeight:1.6,maxHeight:160,overflowY:"auto",caretColor:"#6366f1",opacity:loading?0.55:1}}
+              />
+              {loading
+                ? <button onClick={stop} style={{width:36,height:36,borderRadius:10,border:"none",background:"rgba(239,68,68,0.14)",color:"#f87171",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background 0.15s"}}
+                    onMouseEnter={e=>e.currentTarget.style.background="rgba(239,68,68,0.26)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="rgba(239,68,68,0.14)"}
+                    title="Stop">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+                  </button>
+                : <button onClick={()=>send()} disabled={!canSend}
+                    style={{width:36,height:36,borderRadius:10,border:"none",background:canSend?"linear-gradient(135deg,#6366f1,#8b5cf6)":"rgba(255,255,255,0.06)",color:canSend?"#fff":"#44445a",cursor:canSend?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:canSend?"0 4px 16px rgba(99,102,241,0.35)":"none",transition:"all 0.2s"}}
+                    onMouseEnter={e=>{if(canSend){e.currentTarget.style.transform="scale(1.06)";e.currentTarget.style.opacity="0.88";}}}
+                    onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";e.currentTarget.style.opacity="1";}}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/>
+                    </svg>
+                  </button>
+              }
+            </div>
+            <p style={{textAlign:"center",fontSize:11,color:"#33334a",marginTop:8}}>Neurala AI · Enter to send · Shift+Enter for new line</p>
+          </div>
+        </div>
+
+      </div>
+    </>
+  );
+}
 
